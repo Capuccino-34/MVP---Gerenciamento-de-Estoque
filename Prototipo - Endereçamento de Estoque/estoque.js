@@ -30,7 +30,283 @@ function fecharModal(modalId) {
     if (modalId === 'modalAdicionarSolicitacao') {
         limparFormularioSolicitacao();
     }
+    if (modalId === 'modalDistribuirProduto') {
+        limparFormularioDistribuirProduto();
+    }
 }
+
+// Funções para o gerador de etiquetas
+function abrirModalEtiqueta() {
+    abrirModal('modalEtiqueta');
+    atualizarPreviewEtiqueta();
+}
+
+function atualizarPreviewEtiqueta() {
+    const letra = document.getElementById('etiquetaLetra').value;
+    const numero = document.getElementById('etiquetaNumero').value || '0';
+    document.getElementById('textoEtiqueta').textContent = `${letra}-${numero}`;
+}
+
+function gerarEtiquetaPDF() {
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF();
+    
+    const letra = document.getElementById('etiquetaLetra').value;
+    const numero = document.getElementById('etiquetaNumero').value || '0';
+    const texto = `${letra}-${numero}`;
+    
+    // Desenha a etiqueta no PDF
+    pdf.setFillColor(0, 0, 0);
+    pdf.setDrawColor(255, 255, 255);
+    pdf.setLineWidth(1);
+    
+    // Corpo principal da etiqueta
+    pdf.roundedRect(20, 40, 120, 40, 5, 5, 'FD');
+    
+    // Buraco da etiqueta (círculo branco)
+    pdf.setFillColor(255, 255, 255);
+    pdf.circle(130, 60, 4, 'F');
+    
+    // Texto em branco no centro
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(40);
+    pdf.setFont(undefined, 'bold');
+    pdf.text(texto, 80, 65, { align: 'center' });
+    
+    // Salva o PDF
+    pdf.save(`etiqueta-${texto}.pdf`);
+    fecharModal('modalEtiqueta');
+}
+
+// Event listeners para a etiqueta
+document.addEventListener('DOMContentLoaded', function() {
+    const etiquetaLetra = document.getElementById('etiquetaLetra');
+    const etiquetaNumero = document.getElementById('etiquetaNumero');
+    
+    if (etiquetaLetra && etiquetaNumero) {
+        etiquetaLetra.addEventListener('change', atualizarPreviewEtiqueta);
+        etiquetaNumero.addEventListener('input', atualizarPreviewEtiqueta);
+    }
+});
+
+// Abrir modal para distribuir produto
+function abrirModalDistribuirProduto() {
+    limparFormularioDistribuirProduto();
+    abrirModal('modalDistribuirProduto');
+    atualizarInfoEstoque();
+}
+
+// Limpar formulário do modal de distribuir produto
+function limparFormularioDistribuirProduto() {
+    const form = document.getElementById('formModalDistribuirProduto');
+    if (form) {
+        form.reset();
+    }
+    document.getElementById('estoque-info').textContent = '';
+}
+
+// Atualizar informação de estoque quando produto é selecionado
+function atualizarInfoEstoque() {
+    const produtoSelect = document.getElementById('produto_id');
+    const quantidadeInput = document.getElementById('quantidade_dist');
+    const estoqueInfo = document.getElementById('estoque-info');
+
+    if (produtoSelect && quantidadeInput && estoqueInfo) {
+        const selectedOption = produtoSelect.options[produtoSelect.selectedIndex];
+        if (selectedOption && selectedOption.value) {
+            const stock = parseInt(selectedOption.getAttribute('data-stock')) || 0;
+            quantidadeInput.max = stock;
+
+            // Mostrar informação básica de estoque
+            let infoText = `Estoque atual: ${stock} unidades`;
+            estoqueInfo.innerHTML = infoText;
+            estoqueInfo.style.color = stock > 0 ? '#16a34a' : '#dc2626';
+
+            if (parseInt(quantidadeInput.value) > stock) {
+                quantidadeInput.value = stock;
+            }
+
+            // Atualizar preview se há quantidade selecionada
+            if (quantidadeInput.value) {
+                atualizarPreviewEstoque();
+            }
+        } else {
+            quantidadeInput.removeAttribute('max');
+            estoqueInfo.textContent = '';
+        }
+    }
+}
+
+// Nova função para mostrar preview do status após distribuição
+function atualizarPreviewEstoque() {
+    const produtoSelect = document.getElementById('produto_id');
+    const quantidadeInput = document.getElementById('quantidade_dist');
+    const estoqueInfo = document.getElementById('estoque-info');
+
+    if (!produtoSelect.value || !quantidadeInput.value) {
+        atualizarInfoEstoque();
+        return;
+    }
+
+    const produto_id = parseInt(produtoSelect.value);
+    const quantidade = parseInt(quantidadeInput.value);
+
+    if (quantidade <= 0) {
+        atualizarInfoEstoque();
+        return;
+    }
+
+    // Fazer verificação via AJAX
+    const formData = new FormData();
+    formData.append('acao', 'verificar_estoque');
+    formData.append('produto_id', produto_id);
+    formData.append('quantidade', quantidade);
+
+    fetch('Estoque.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.sucesso) {
+            let statusText = '';
+            let statusColor = '#16a34a';
+
+            switch (data.novo_status) {
+                case 'out_of_stock':
+                    statusText = 'SEM ESTOQUE';
+                    statusColor = '#dc2626';
+                    break;
+                case 'low_stock':
+                    statusText = 'ESTOQUE BAIXO';
+                    statusColor = '#f97316';
+                    break;
+                case 'in_stock':
+                    statusText = 'EM ESTOQUE';
+                    statusColor = '#16a34a';
+                    break;
+            }
+
+            estoqueInfo.innerHTML = `
+                <div>
+                    <div>Estoque atual: ${data.disponivel} unidades</div>
+                    <div style="margin-top: 4px;">
+                        <strong>Após distribuição: ${data.nova_quantidade} unidades</strong>
+                        <span style="color: ${statusColor}; font-weight: bold; margin-left: 8px;">(${statusText})</span>
+                    </div>
+                    ${data.novo_status === 'low_stock' ? `<div style="font-size: 0.7rem; color: #f97316;">⚠️ Estoque ficará abaixo do mínimo (${data.estoque_minimo})</div>` : ''}
+                </div>
+            `;
+            estoqueInfo.style.color = '#374151';
+        } else {
+            estoqueInfo.textContent = data.mensagem;
+            estoqueInfo.style.color = '#dc2626';
+        }
+    })
+    .catch(error => {
+        console.error('Erro ao verificar estoque:', error);
+        atualizarInfoEstoque(); // Fallback para informação básica
+    });
+}
+
+// Função para salvar distribuição
+function salvarDistribuicao() {
+    const form = document.getElementById('formModalDistribuirProduto');
+    const loja = document.getElementById('loja_id').value;
+    const produto_id = document.getElementById('produto_id').value;
+    const quantidade = document.getElementById('quantidade_dist').value;
+    const preco_venda = document.getElementById('preco_venda_dist').value;
+
+    // Validações
+    if (!loja) {
+        alert('Selecione uma loja');
+        return;
+    }
+    if (!produto_id) {
+        alert('Selecione um produto');
+        return;
+    }
+    if (!quantidade || quantidade <= 0) {
+        alert('Informe uma quantidade válida');
+        return;
+    }
+    if (!preco_venda || preco_venda <= 0) {
+        alert('Informe um preço de venda válido');
+        return;
+    }
+
+    // Verificar estoque
+    const produtoSelect = document.getElementById('produto_id');
+    const selectedOption = produtoSelect.options[produtoSelect.selectedIndex];
+    const stock = parseInt(selectedOption.getAttribute('data-stock')) || 0;
+    
+    if (parseInt(quantidade) > stock) {
+        alert(`Estoque insuficiente! Disponível: ${stock} unidades`);
+        return;
+    }
+
+    showLoader('Salvando distribuição...');
+
+    // Preparar dados para envio
+    const formData = new FormData();
+    formData.append('acao', 'salvar_distribuicao');
+    formData.append('loja', loja);
+    formData.append('produto_id', produto_id);
+    formData.append('quantidade', quantidade);
+    formData.append('preco_venda', preco_venda);
+
+    fetch('Estoque.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoader();
+        if (data.sucesso) {
+            showNotification(data.mensagem, 'success');
+            fecharModal('modalDistribuirProduto');
+            // Mostrar notificação de sucesso e recarregar para ver as mudanças
+            showNotification('✅ Status do estoque atualizado automaticamente!', 'info');
+            setTimeout(() => {
+                location.reload();
+            }, 1000);
+        } else {
+            showNotification('Erro: ' + data.mensagem, 'error');
+        }
+    })
+    .catch(error => {
+        hideLoader();
+        console.error('Erro:', error);
+        showNotification('Erro ao salvar distribuição', 'error');
+    });
+}
+
+// Event listeners
+document.addEventListener('DOMContentLoaded', function() {
+    // Listener para atualizar estoque quando produto é selecionado
+    const produtoSelect = document.getElementById('produto_id');
+    if (produtoSelect) {
+        produtoSelect.addEventListener('change', atualizarInfoEstoque);
+    }
+
+    // Listener para validar quantidade e mostrar preview ao digitar
+    const quantidadeInput = document.getElementById('quantidade_dist');
+    if (quantidadeInput) {
+        quantidadeInput.addEventListener('input', function() {
+            const max = parseInt(this.max);
+            if (!isNaN(max) && parseInt(this.value) > max) {
+                this.value = max;
+                alert('Produto insuficiente no estoque.');
+            }
+
+            // Atualizar preview do status em tempo real
+            atualizarPreviewEstoque();
+        });
+
+        // Também atualizar quando sair do campo
+        quantidadeInput.addEventListener('blur', atualizarPreviewEstoque);
+    }
+});
 
 function abrirModalAdicionar() {
     modoEdicao = false;
@@ -50,7 +326,7 @@ function limparFormulario() {
 function visualizarProduto(id) {
     showLoader('Carregando produto...');
     
-    fetch('estoque.php', {
+    fetch('Estoque.php', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -147,7 +423,7 @@ function obterBadgeStatus(status) {
 function editarProduto(id) {
     showLoader('Carregando dados para edição...');
     
-    fetch('estoque.php', {
+    fetch('Estoque.php', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -195,7 +471,7 @@ function excluirProduto(id, nome) {
     if (confirm(`Tem certeza que deseja excluir o produto "${nome}"?\n\nEsta ação não pode ser desfeita.`)) {
         showLoader('Excluindo produto...');
         
-        fetch('estoque.php', {
+        fetch('Estoque.php', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -231,7 +507,9 @@ function salvarProduto() {
     }
 
     const formData = new FormData(form);
-    formData.set('unidade', formData.get('unidade') || 'un');
+    formData.set('unidade', formData.get('unidade') || 'un'); // Ensure unit is set
+    formData.set('estoque_minimo', formData.get('estoque_minimo') || 0); // Ensure minimum stock is set
+    formData.set('estoque_maximo', formData.get('estoque_maximo') || 0); // Ensure maximum stock is set
     
     // Determinar ação
     const acao = modoEdicao ? 'editar_produto' : 'adicionar_produto';
@@ -245,7 +523,7 @@ function salvarProduto() {
     showLoader(loadingText);
     
     // Enviar dados
-    fetch('estoque.php', {
+    fetch('Estoque.php', {
         method: 'POST',
         body: formData
     })
@@ -833,6 +1111,26 @@ style.textContent = `
 
     .table tr {
         transition: background-color 0.2s ease;
+    }
+
+    /* Estilos para preview de estoque */
+    #estoque-info {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 8px 12px;
+        margin-top: 4px;
+        font-size: 0.75rem;
+        line-height: 1.4;
+        transition: all 0.3s ease;
+    }
+
+    #estoque-info:empty {
+        display: none;
+    }
+
+    .status-preview {
+        animation: fadeIn 0.3s ease-in-out;
     }
 `;
 

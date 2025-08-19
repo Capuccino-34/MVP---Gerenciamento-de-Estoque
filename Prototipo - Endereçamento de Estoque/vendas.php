@@ -348,19 +348,38 @@ $lojas = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="table-container">
                     <table class="table">
                         <thead>
-                            <tr>
-                                <th>Data/Hora</th>
-                                <th>Loja</th>
-                                <th>Produto</th>
-                                <th>Quantidade</th>
-                                <th>Preço Unitário</th>
-                                <th>Total</th>
-                                <th>Pagamento</th>
-                            </tr>
-                        </thead>
-                        <tbody id="vendas-tbody">
-                            <!-- Vendas serão carregadas via JavaScript -->
-                        </tbody>
+                        <tr>
+                            <th>Data/Hora</th>
+                            <th>Loja</th>
+                            <th>Produto</th>
+                            <th>Quantidade</th>
+                            <th>Preço Unitário</th>
+                            <th>Total</th>
+                            <th>Pagamento</th>
+                        </tr>
+                    </thead>
+                    <tbody id="vendas-tbody">
+                        <?php
+                        // Fetch vendas data
+                        $stmt = $pdo->query("SELECT v.*, l.nome as loja_nome, p.nome as produto_nome FROM vendas v LEFT JOIN lojas l ON v.loja_id = l.id LEFT JOIN produtos p ON v.produto_id = p.id ORDER BY v.created_at DESC");
+                        $vendas = $stmt->fetchAll();
+                        if (empty($vendas)) {
+                            echo '<tr><td colspan="7" class="text-center" style="padding: 2rem; color: #64748b;">Nenhuma venda registrada</td></tr>';
+                        } else {
+                            foreach ($vendas as $venda) {
+                                echo '<tr>';
+                                echo '<td>' . htmlspecialchars($venda['created_at'] ?? $venda['data_venda']) . '</td>';
+                                echo '<td>' . htmlspecialchars($venda['loja_nome']) . '</td>';
+                                echo '<td>' . htmlspecialchars($venda['produto_nome']) . '</td>';
+                                echo '<td>' . (int)$venda['quantidade'] . '</td>';
+                                echo '<td>R$ ' . number_format($venda['preco_unitario'], 2, ',', '.') . '</td>';
+                                echo '<td>R$ ' . number_format($venda['total'], 2, ',', '.') . '</td>';
+                                echo '<td>' . htmlspecialchars($venda['metodo_pagamento']) . '</td>';
+                                echo '</tr>';
+                            }
+                        }
+                        ?>
+                    </tbody>
                     </table>
                 </div>
             </div>

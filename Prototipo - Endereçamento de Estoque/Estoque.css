@@ -188,7 +188,13 @@ body {
     padding: 1.5rem 1.5rem 0.5rem;
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
+}
+
+.card-header-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-shrink: 0;
 }
 
 .card-title {
@@ -602,7 +608,8 @@ body {
 
 /* Solicitação de Produtos Section */
 .solicitacao-produtos {
-    margin-top: 2rem;
+    margin-top: 1rem;
+    width: 100%;
 }
 
 .solicitacao-produtos .card-header {

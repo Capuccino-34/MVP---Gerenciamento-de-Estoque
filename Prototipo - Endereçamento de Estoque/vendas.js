@@ -6,28 +6,24 @@ let lojaAtual = null;
 // Inicialização
 document.addEventListener('DOMContentLoaded', function() {
     inicializarEventos();
-    carregarEstatisticas();
-    carregarHistoricoVendas();
+    carregarVendas();
 });
 
 // Eventos
 function inicializarEventos() {
     // Filtro de loja
     document.getElementById('loja-filtro').addEventListener('change', function() {
-        const lojaId = this.value;
-        if (lojaId) {
-            lojaAtual = lojaId;
-            carregarProdutosLoja(lojaId);
-            carregarEstatisticas();
+        const loja = this.value;
+        if (loja && loja !== 'todas') {
+            lojaAtual = loja;
+            carregarProdutosDaLoja(loja);
         } else {
             mostrarEstadoVazio();
+            produtos = [];
         }
     });
     
-    // Busca de produtos
-    document.getElementById('busca-produto').addEventListener('input', filtrarProdutos);
-    
-    // Botão finalizar venda
+    // Botão finalizar compra
     document.getElementById('btn-finalizar').addEventListener('click', abrirCheckout);
     
     // Botões do modal de checkout
@@ -37,17 +33,12 @@ function inicializarEventos() {
     document.querySelectorAll('.opcao-pagamento').forEach(btn => {
         btn.addEventListener('click', function() {
             const metodo = this.dataset.metodo;
-            processarVenda(metodo);
+            processarCompra(metodo);
         });
     });
     
-    // Nova venda
-    document.getElementById('btn-nova-venda').addEventListener('click', novaVenda);
-    
-    // Filtros do histórico
-    document.getElementById('loja-historico').addEventListener('change', carregarHistoricoVendas);
-    document.getElementById('data-inicio').addEventListener('change', carregarHistoricoVendas);
-    document.getElementById('data-fim').addEventListener('change', carregarHistoricoVendas);
+    // Nova compra
+    document.getElementById('btn-nova-compra').addEventListener('click', novaCompra);
     
     // Fechar modais clicando fora
     document.querySelectorAll('.modal-overlay').forEach(modal => {
@@ -67,11 +58,11 @@ function inicializarEventos() {
 }
 
 // Carregar produtos da loja selecionada
-async function carregarProdutosLoja(lojaId) {
+async function carregarProdutosDaLoja(loja) {
     try {
         const formData = new FormData();
-        formData.append('action', 'get_produtos_loja');
-        formData.append('loja_id', lojaId);
+        formData.append('action', 'get_produtos_distribuidos');
+        formData.append('loja', loja);
 
         const response = await fetch('vendas.php', {
             method: 'POST',
@@ -96,39 +87,57 @@ function renderizarProdutos() {
     if (produtos.length === 0) {
         grid.innerHTML = `
             <div class="empty-state">
-                <i class="fas fa-box-open"></i>
-                <h3>Nenhum produto disponível</h3>
-                <p>Esta loja não possui produtos em estoque</p>
+                <svg class="icon-lg" viewBox="0 0 24 24">
+                    <rect x="3" y="4" width="18" height="16" rx="2" ry="2"/>
+                    <line x1="3" y1="10" x2="21" y2="10"/>
+                    <line x1="9" y1="4" x2="9" y2="20"/>
+                </svg>
+                <h3>Nenhum produto distribuído</h3>
+                <p>Esta loja não possui produtos distribuídos</p>
             </div>
         `;
         return;
     }
 
-    grid.innerHTML = produtos.map(produto => {
-        const status = getStatusProduto(produto.quantidade);
+    // Agrupar produtos por nome (somar quantidades)
+    const produtosAgrupados = {};
+    produtos.forEach(produto => {
+        const key = produto.produto_id;
+        if (produtosAgrupados[key]) {
+            produtosAgrupados[key].quantidade += parseInt(produto.quantidade);
+        } else {
+            produtosAgrupados[key] = { ...produto };
+            produtosAgrupados[key].quantidade = parseInt(produto.quantidade);
+        }
+    });
+
+    grid.innerHTML = Object.values(produtosAgrupados).map(produto => {
         return `
-            <div class="produto-card" data-nome="${produto.nome.toLowerCase()}" data-categoria="${produto.categoria}">
+            <div class="produto-card">
                 <div class="produto-info">
-                    <h3 class="produto-nome">${produto.nome}</h3>
+                    <h4 class="produto-nome">${produto.produto_nome || 'Produto ID: ' + produto.produto_id}</h4>
                     <div class="produto-meta">
-                        <span class="produto-categoria">${produto.categoria}</span>
-                        <span class="status-badge ${status.class}">${status.text}</span>
+                        <span class="produto-categoria">${produto.categoria || 'Categoria não informada'}</span>
+                        <span class="produto-loja">${produto.loja}</span>
                     </div>
                     <p class="produto-disponivel">${produto.quantidade} disponível</p>
                 </div>
                 <div class="produto-compra">
                     <div class="preco-container">
-                        <span class="preco">R$ ${parseFloat(produto.preco_venda).toFixed(2)}</span>
-                        <span class="unidade">por unidade</span>
+                        <span class="preco">R$ ${parseFloat(produto.preco_venda).toFixed(2).replace('.', ',')}</span>
+                        <span class="unidade">por ${produto.unidade || 'unidade'}</span>
                     </div>
                     <button class="btn-adicionar-carrinho" 
                             data-id="${produto.produto_id}"
-                            data-nome="${produto.nome}"
+                            data-nome="${produto.produto_nome || 'Produto ID: ' + produto.produto_id}"
                             data-preco="${produto.preco_venda}"
                             data-disponivel="${produto.quantidade}"
-                            data-categoria="${produto.categoria}"
+                            data-loja="${produto.loja}"
                             ${produto.quantidade === 0 ? 'disabled' : ''}>
-                        <i class="fas fa-plus"></i>
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
                         Adicionar
                     </button>
                 </div>
@@ -144,39 +153,10 @@ function renderizarProdutos() {
                 nome: this.dataset.nome,
                 preco: parseFloat(this.dataset.preco),
                 disponivel: parseInt(this.dataset.disponivel),
-                categoria: this.dataset.categoria
+                loja: this.dataset.loja
             };
             adicionarAoCarrinho(produtoData);
         });
-    });
-}
-
-function getStatusProduto(quantidade) {
-    if (quantidade === 0) {
-        return { class: 'status-esgotado', text: 'Esgotado' };
-    } else if (quantidade < 5) {
-        return { class: 'status-baixo', text: 'Baixo' };
-    } else {
-        return { class: 'status-disponivel', text: 'Disponível' };
-    }
-}
-
-// Filtrar produtos
-function filtrarProdutos() {
-    const busca = document.getElementById('busca-produto').value.toLowerCase();
-    const produtoCards = document.querySelectorAll('.produto-card');
-    
-    produtoCards.forEach(card => {
-        const nome = card.dataset.nome;
-        const categoria = card.dataset.categoria.toLowerCase();
-        
-        const matchBusca = nome.includes(busca) || categoria.includes(busca);
-        
-        if (matchBusca) {
-            card.style.display = 'block';
-        } else {
-            card.style.display = 'none';
-        }
     });
 }
 
@@ -208,7 +188,7 @@ function adicionarAoCarrinho(produto) {
     // Feedback visual
     const btn = document.querySelector(`[data-id="${produto.id}"]`);
     const textoOriginal = btn.innerHTML;
-    btn.innerHTML = '<i class="fas fa-check"></i> Adicionado!';
+    btn.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><polyline points="20,6 9,17 4,12"/></svg> Adicionado!';
     btn.style.background = '#16a34a';
     
     setTimeout(() => {
@@ -253,7 +233,7 @@ function atualizarCarrinho() {
         carrinhoTotal.classList.add('hidden');
         btnFinalizar.disabled = true;
         contadorCarrinho.textContent = '0 itens no carrinho';
-        btnFinalizar.innerHTML = '<i class="fas fa-shopping-cart"></i> Finalizar Venda (R$ 0,00)';
+        btnFinalizar.innerHTML = 'Finalizar Compra (R$ 0,00)';
     } else {
         carrinhoVazio.classList.add('hidden');
         carrinhoItens.classList.remove('hidden');
@@ -267,7 +247,7 @@ function atualizarCarrinho() {
         totalItens.textContent = quantidadeTotal;
         valorTotal.textContent = formatarMoeda(valorTotalCalculado);
         contadorCarrinho.textContent = `${quantidadeTotal} itens no carrinho`;
-        btnFinalizar.innerHTML = `<i class="fas fa-shopping-cart"></i> Finalizar Venda (${formatarMoeda(valorTotalCalculado)})`;
+        btnFinalizar.innerHTML = `Finalizar Compra (${formatarMoeda(valorTotalCalculado)})`;
         
         // Renderizar itens
         renderizarItensCarrinho();
@@ -338,64 +318,62 @@ function fecharCheckout() {
     document.getElementById('modal-checkout').classList.remove('active');
 }
 
-// Processar venda
-async function processarVenda(metodo) {
+// Processar compra
+async function processarCompra(metodo) {
     if (carrinho.length === 0 || !lojaAtual) return;
     
     try {
-        // Processar cada item do carrinho
-        for (const item of carrinho) {
-            const formData = new FormData();
-            formData.append('action', 'processar_venda');
-            formData.append('loja_id', lojaAtual);
-            formData.append('produto_id', item.produto.id);
-            formData.append('quantidade', item.quantidade);
-            formData.append('preco_unitario', item.produto.preco);
-            formData.append('metodo_pagamento', metodo);
+        const itens = carrinho.map(item => ({
+            produto_id: item.produto.id,
+            quantidade: item.quantidade,
+            preco_unitario: item.produto.preco
+        }));
+        
+        const formData = new FormData();
+        formData.append('action', 'processar_compra');
+        formData.append('loja', lojaAtual);
+        formData.append('itens', JSON.stringify(itens));
+        formData.append('forma_pagamento', metodo);
+        formData.append('total', calcularTotal().toFixed(2));
 
-            const response = await fetch('vendas.php', {
-                method: 'POST',
-                body: formData
-            });
+        const response = await fetch('vendas.php', {
+            method: 'POST',
+            body: formData
+        });
 
-            const data = await response.json();
-            if (!data.success) {
-                throw new Error(data.message || 'Erro ao processar venda');
-            }
+        const data = await response.json();
+        if (data.success) {
+            const total = calcularTotal();
+            
+            // Fechar modal de checkout
+            fecharCheckout();
+            
+            // Mostrar modal de confirmação
+            setTimeout(() => {
+                document.getElementById('metodo-selecionado').textContent = metodo;
+                document.getElementById('valor-confirmacao').textContent = formatarMoeda(total);
+                document.getElementById('modal-confirmacao').classList.add('active');
+            }, 300);
+            
+            // Recarregar dados
+            carregarProdutosDaLoja(lojaAtual);
+            carregarVendas();
+            
+        } else {
+            mostrarNotificacao('Erro ao processar compra: ' + data.message, 'error');
         }
         
-        const total = calcularTotal();
-        
-        // Fechar modal de checkout
-        fecharCheckout();
-        
-        // Mostrar modal de confirmação
-        setTimeout(() => {
-            document.getElementById('metodo-selecionado').textContent = metodo;
-            document.getElementById('valor-confirmacao').textContent = formatarMoeda(total);
-            document.getElementById('modal-confirmacao').classList.add('active');
-        }, 300);
-        
-        // Atualizar dados
-        carregarProdutosLoja(lojaAtual);
-        carregarEstatisticas();
-        carregarHistoricoVendas();
-        
     } catch (error) {
-        console.error('Erro ao processar venda:', error);
-        mostrarNotificacao('Erro ao processar venda: ' + error.message, 'error');
+        console.error('Erro ao processar compra:', error);
+        mostrarNotificacao('Erro ao processar compra', 'error');
     }
 }
 
-// Nova venda
-function novaVenda() {
+// Nova compra
+function novaCompra() {
     carrinho = [];
     atualizarCarrinho();
     document.getElementById('modal-confirmacao').classList.remove('active');
-    
-    // Reset dos filtros
-    document.getElementById('busca-produto').value = '';
-    filtrarProdutos();
 }
 
 // Fechar todos os modais
@@ -410,101 +388,25 @@ function mostrarEstadoVazio() {
     const grid = document.getElementById('produtos-grid');
     grid.innerHTML = `
         <div class="empty-state">
-            <i class="fas fa-store"></i>
+            <svg class="icon-lg" viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="16" rx="2" ry="2"/>
+                <line x1="3" y1="10" x2="21" y2="10"/>
+                <line x1="9" y1="4" x2="9" y2="20"/>
+            </svg>
             <h3>Selecione uma loja</h3>
-            <p>Escolha uma loja para ver os produtos disponíveis</p>
-        </div>
-    `;
-}
-
-// Carregar estatísticas
-async function carregarEstatisticas() {
-    try {
-        const formData = new FormData();
-        formData.append('action', 'get_estatisticas_vendas');
-        
-        if (lojaAtual) {
-            formData.append('loja_id', lojaAtual);
-        }
-
-        const response = await fetch('vendas.php', {
-            method: 'POST',
-            body: formData
-        });
-
-        const data = await response.json();
-        if (data.success) {
-            renderizarEstatisticas(data.stats);
-        }
-    } catch (error) {
-        console.error('Erro ao carregar estatísticas:', error);
-    }
-}
-
-// Renderizar estatísticas
-function renderizarEstatisticas(stats) {
-    const container = document.getElementById('stats-container');
-    
-    container.innerHTML = `
-        <div class="stat-card">
-            <div class="stat-header">
-                <span class="stat-title">Total de Vendas</span>
-                <div class="stat-icon" style="background: #3b82f6;">
-                    <i class="fas fa-shopping-cart"></i>
-                </div>
-            </div>
-            <div class="stat-value">${stats.total_vendas}</div>
-            <div class="stat-description">vendas realizadas</div>
-        </div>
-
-        <div class="stat-card">
-            <div class="stat-header">
-                <span class="stat-title">Faturamento</span>
-                <div class="stat-icon" style="background: #10b981;">
-                    <i class="fas fa-dollar-sign"></i>
-                </div>
-            </div>
-            <div class="stat-value">R$ ${parseFloat(stats.faturamento_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-            <div class="stat-description">receita total</div>
-        </div>
-
-        <div class="stat-card">
-            <div class="stat-header">
-                <span class="stat-title">Produtos Vendidos</span>
-                <div class="stat-icon" style="background: #f59e0b;">
-                    <i class="fas fa-box"></i>
-                </div>
-            </div>
-            <div class="stat-value">${stats.produtos_vendidos}</div>
-            <div class="stat-description">unidades vendidas</div>
-        </div>
-
-        <div class="stat-card">
-            <div class="stat-header">
-                <span class="stat-title">Ticket Médio</span>
-                <div class="stat-icon" style="background: #8b5cf6;">
-                    <i class="fas fa-chart-line"></i>
-                </div>
-            </div>
-            <div class="stat-value">R$ ${parseFloat(stats.ticket_medio).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-            <div class="stat-description">valor médio por venda</div>
+            <p>Escolha uma loja para ver os produtos distribuídos</p>
         </div>
     `;
 }
 
 // Carregar histórico de vendas
-async function carregarHistoricoVendas() {
+async function carregarVendas() {
     try {
         const formData = new FormData();
         formData.append('action', 'get_vendas');
         
-        const lojaHistorico = document.getElementById('loja-historico').value;
         const dataInicio = document.getElementById('data-inicio').value;
         const dataFim = document.getElementById('data-fim').value;
-        
-        if (lojaHistorico && lojaHistorico !== 'todas') {
-            formData.append('loja_id', lojaHistorico);
-        }
         
         if (dataInicio) {
             formData.append('data_inicio', dataInicio);
@@ -533,14 +435,24 @@ function renderizarHistoricoVendas(vendas) {
     const tbody = document.getElementById('vendas-tbody');
     
     if (vendas.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 2rem; color: #64748b;">Nenhuma venda encontrada</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 2rem; color: #64748b;">Nenhuma venda encontrada</td></tr>';
         return;
     }
 
     tbody.innerHTML = vendas.map(venda => {
-        const data = new Date(venda.created_at);
+        const data = new Date(venda.data_venda);
         const dataFormatada = data.toLocaleDateString('pt-BR');
         const horaFormatada = data.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        
+        // Processar itens da venda
+        let produtosTexto = 'Sem produtos';
+        if (venda.itens) {
+            const itens = venda.itens.split('||').map(item => {
+                const [nome, quantidade, preco] = item.split('|');
+                return `${nome} (${quantidade}x)`;
+            });
+            produtosTexto = itens.join(', ');
+        }
         
         return `
             <tr>
@@ -550,20 +462,21 @@ function renderizarHistoricoVendas(vendas) {
                         <div style="font-size: 0.75rem; color: #64748b;">${horaFormatada}</div>
                     </div>
                 </td>
-                <td><strong>${venda.loja_nome}</strong></td>
                 <td>
-                    <div>
-                        <strong>${venda.produto_nome}</strong>
-                        <div style="font-size: 0.75rem; color: #64748b;">${venda.categoria}</div>
+                    <div style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        ${produtosTexto}
                     </div>
                 </td>
-                <td><strong>${venda.quantidade}</strong> un</td>
-                <td>R$ ${parseFloat(venda.preco_unitario).toFixed(2)}</td>
-                <td><strong>R$ ${parseFloat(venda.total).toFixed(2)}</strong></td>
+                <td><strong>R$ ${parseFloat(venda.total).toFixed(2).replace('.', ',')}</strong></td>
                 <td>
-                    <span class="status-badge status-disponivel">
-                        ${getIconePagamento(venda.metodo_pagamento)}
-                        ${venda.metodo_pagamento}
+                    <span class="badge badge-success">
+                        ${getIconePagamento(venda.forma_pagamento)}
+                        ${venda.forma_pagamento}
+                    </span>
+                </td>
+                <td>
+                    <span class="badge badge-success">
+                        ${venda.status_pagamento === 'pago' ? 'Pago' : venda.status_pagamento}
                     </span>
                 </td>
             </tr>
@@ -573,12 +486,12 @@ function renderizarHistoricoVendas(vendas) {
 
 function getIconePagamento(metodo) {
     const icones = {
-        'Dinheiro': '<i class="fas fa-money-bill-wave"></i>',
-        'Cartão de Débito': '<i class="fas fa-credit-card"></i>',
-        'Cartão de Crédito': '<i class="fas fa-credit-card"></i>',
-        'PIX': '<i class="fas fa-qrcode"></i>'
+        'Dinheiro': '<svg class="icon-sm" viewBox="0 0 24 24"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H16a3.5 3.5 0 0 1 0 7H7"/></svg>',
+        'Cartão de Débito': '<svg class="icon-sm" viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
+        'Cartão de Crédito': '<svg class="icon-sm" viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
+        'PIX': '<svg class="icon-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><rect x="7" y="7" width="10" height="10"/></svg>'
     };
-    return icones[metodo] || '<i class="fas fa-money-bill"></i>';
+    return icones[metodo] || '<svg class="icon-sm" viewBox="0 0 24 24"><path d="M12 1v22"/></svg>';
 }
 
 // Utilitários
@@ -612,44 +525,6 @@ function mostrarNotificacao(mensagem, tipo = 'info') {
             notificacao.remove();
         }
     }, 5000);
-}
-
-// Animação de sucesso personalizada
-function animarSucesso() {
-    const checkmark = document.querySelector('.checkmark');
-    const checkIcon = document.querySelector('.checkmark i');
-    
-    // Reset da animação
-    checkmark.style.animation = 'none';
-    checkIcon.style.animation = 'none';
-    
-    // Força reflow
-    checkmark.offsetHeight;
-    
-    // Aplicar animação novamente
-    checkmark.style.animation = 'checkmarkBounce 0.6s ease-in-out';
-    checkIcon.style.animation = 'checkmarkCheck 0.3s ease-in-out 0.3s both';
-}
-
-// Executar animação quando o modal de confirmação aparecer
-const observer = new MutationObserver(function(mutations) {
-    mutations.forEach(function(mutation) {
-        if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
-            const modal = mutation.target;
-            if (modal.id === 'modal-confirmacao' && modal.classList.contains('active')) {
-                setTimeout(animarSucesso, 100);
-            }
-        }
-    });
-});
-
-// Observar mudanças no modal de confirmação se existir
-const modalConfirmacao = document.getElementById('modal-confirmacao');
-if (modalConfirmacao) {
-    observer.observe(modalConfirmacao, {
-        attributes: true,
-        attributeFilter: ['class']
-    });
 }
 
 // Adicionar estilos para notificações
@@ -710,6 +585,351 @@ style.textContent = `
         opacity: 1;
     }
 
+    .hidden {
+        display: none !important;
+    }
+
+    .produtos-vendas-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 2rem;
+        margin-bottom: 2rem;
+    }
+
+    .produtos-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 1rem;
+    }
+
+    .produto-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 1rem;
+        background: white;
+        transition: all 0.2s;
+    }
+
+    .produto-card:hover {
+        border-color: #3b82f6;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
+    }
+
+    .produto-nome {
+        font-size: 1.125rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        color: #1f2937;
+    }
+
+    .produto-meta {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 0.5rem;
+        font-size: 0.875rem;
+        color: #64748b;
+    }
+
+    .produto-disponivel {
+        font-size: 0.875rem;
+        color: #16a34a;
+        margin-bottom: 1rem;
+    }
+
+    .preco-container {
+        margin-bottom: 1rem;
+    }
+
+    .preco {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #1f2937;
+    }
+
+    .unidade {
+        font-size: 0.75rem;
+        color: #64748b;
+    }
+
+    .btn-adicionar-carrinho {
+        width: 100%;
+        background: #2563eb;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 0.75rem;
+        font-weight: 500;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        transition: all 0.2s;
+    }
+
+    .btn-adicionar-carrinho:hover:not(:disabled) {
+        background: #1d4ed8;
+        transform: translateY(-1px);
+    }
+
+    .btn-adicionar-carrinho:disabled {
+        background: #9ca3af;
+        cursor: not-allowed;
+    }
+
+    .empty-state {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        color: #64748b;
+        padding: 3rem 1rem;
+    }
+
+    .empty-state .icon-lg {
+        width: 3rem;
+        height: 3rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    .carrinho-vazio {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        color: #64748b;
+        padding: 2rem 1rem;
+    }
+
+    .carrinho-vazio .icon-lg {
+        width: 2rem;
+        height: 2rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    .carrinho-item {
+        border-bottom: 1px solid #e2e8f0;
+        padding: 1rem 0;
+    }
+
+    .carrinho-item:last-child {
+        border-bottom: none;
+    }
+
+    .item-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+
+    .item-nome {
+        font-weight: 500;
+        color: #1f2937;
+    }
+
+    .btn-remover {
+        background: none;
+        border: none;
+        color: #ef4444;
+        font-size: 0.875rem;
+        cursor: pointer;
+    }
+
+    .item-preco {
+        font-size: 0.875rem;
+        color: #64748b;
+        margin-bottom: 0.5rem;
+    }
+
+    .item-controles {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .quantidade-controles {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .btn-quantidade {
+        width: 24px;
+        height: 24px;
+        border: 1px solid #d1d5db;
+        background: white;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        font-size: 0.875rem;
+    }
+
+    .btn-quantidade:hover:not(:disabled) {
+        background: #f3f4f6;
+    }
+
+    .btn-quantidade:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .quantidade-valor {
+        font-weight: 500;
+        min-width: 24px;
+        text-align: center;
+    }
+
+    .item-total {
+        font-weight: 600;
+        color: #1f2937;
+    }
+
+    .carrinho-total {
+        border-top: 1px solid #e2e8f0;
+        padding-top: 1rem;
+        margin-top: 1rem;
+    }
+
+    .total-linha {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 600;
+        color: #1f2937;
+    }
+
+    .contador-carrinho {
+        font-size: 0.875rem;
+        color: #64748b;
+        font-weight: 500;
+    }
+
+    .filtros-vendas {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+    }
+
+    .opcoes-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+
+    .opcao-pagamento {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 1rem;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        background: white;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .opcao-pagamento:hover {
+        border-color: #3b82f6;
+        background: #f8fafc;
+    }
+
+    .opcao-pagamento .icon {
+        width: 24px;
+        height: 24px;
+    }
+
+    .resumo-compra {
+        margin-bottom: 2rem;
+    }
+
+    .resumo-itens {
+        margin: 1rem 0;
+    }
+
+    .resumo-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 0.5rem;
+        font-size: 0.875rem;
+    }
+
+    .resumo-total {
+        display: flex;
+        justify-content: space-between;
+        font-weight: 600;
+        font-size: 1.125rem;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 1rem;
+        margin-top: 1rem;
+    }
+
+    .modal-confirmacao {
+        max-width: 400px;
+    }
+
+    .confirmacao-content {
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .checkmark-container {
+        margin-bottom: 1rem;
+    }
+
+    .checkmark {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background: #16a34a;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto;
+        color: white;
+    }
+
+    .checkmark .icon {
+        width: 24px;
+        height: 24px;
+    }
+
+    .valor-confirmacao {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #16a34a;
+        margin: 1rem 0;
+    }
+
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+
+    .badge-success {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .icon-sm {
+        width: 12px;
+        height: 12px;
+    }
+
     @keyframes slideInRight {
         from {
             transform: translateX(100%);
@@ -718,6 +938,25 @@ style.textContent = `
         to {
             transform: translateX(0);
             opacity: 1;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .produtos-vendas-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .produtos-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .opcoes-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .filtros-vendas {
+            flex-direction: column;
+            align-items: stretch;
         }
     }
 `;

@@ -98,6 +98,108 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['sucesso' => false, 'mensagem' => 'Erro ao enviar solicitação: ' . $e->getMessage()]);
             }
             exit;
+
+        case 'salvar_distribuicao':
+            try {
+                $loja = $_POST['loja'] ?? '';
+                $produto_id = intval($_POST['produto_id'] ?? 0);
+                $quantidade = intval($_POST['quantidade'] ?? 0);
+                $preco_venda = floatval($_POST['preco_venda'] ?? 0);
+
+                if (empty($loja) || $produto_id <= 0 || $quantidade <= 0 || $preco_venda <= 0) {
+                    echo json_encode(['sucesso' => false, 'mensagem' => 'Todos os campos são obrigatórios e devem ser válidos.']);
+                    exit;
+                }
+
+                // Iniciar transação
+                $pdo->beginTransaction();
+
+                // Verificar se o produto existe e tem estoque suficiente
+                $produto = buscarProdutoPorId($pdo, $produto_id);
+                if (!$produto) {
+                    $pdo->rollBack();
+                    echo json_encode(['sucesso' => false, 'mensagem' => 'Produto não encontrado.']);
+                    exit;
+                }
+
+                if ($produto['quantidade'] < $quantidade) {
+                    $pdo->rollBack();
+                    echo json_encode(['sucesso' => false, 'mensagem' => 'Estoque insuficiente. Disponível: ' . $produto['quantidade']]);
+                    exit;
+                }
+
+                // Diminuir estoque do produto principal
+                $nova_quantidade = $produto['quantidade'] - $quantidade;
+
+                // Determinar novo status baseado na quantidade atualizada
+                $novo_status = 'in_stock';
+                if ($nova_quantidade == 0) {
+                    $novo_status = 'out_of_stock';
+                } elseif ($nova_quantidade <= $produto['estoque_minimo']) {
+                    $novo_status = 'low_stock';
+                }
+
+                // Atualizar estoque e status do produto
+                $stmt = $pdo->prepare("UPDATE produtos SET quantidade = ?, status = ? WHERE id = ?");
+                $stmt->execute([$nova_quantidade, $novo_status, $produto_id]);
+
+                // Inserir na tabela distribuir
+                if (inserirProdutoDistribuido($pdo, $loja, $produto_id, $quantidade, $preco_venda)) {
+                    $pdo->commit();
+                    echo json_encode(['sucesso' => true, 'mensagem' => 'Produto distribuído com sucesso! Estoque atualizado.']);
+                } else {
+                    $pdo->rollBack();
+                    echo json_encode(['sucesso' => false, 'mensagem' => 'Erro ao salvar distribuição.']);
+                }
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                echo json_encode(['sucesso' => false, 'mensagem' => 'Erro: ' . $e->getMessage()]);
+            }
+            exit;
+
+        case 'verificar_estoque':
+            try {
+                $produto_id = intval($_POST['produto_id'] ?? 0);
+                $quantidade = intval($_POST['quantidade'] ?? 0);
+
+                if ($produto_id <= 0 || $quantidade <= 0) {
+                    echo json_encode(['sucesso' => false, 'mensagem' => 'Dados inválidos']);
+                    exit;
+                }
+
+                $produto = buscarProdutoPorId($pdo, $produto_id);
+                if (!$produto) {
+                    echo json_encode(['sucesso' => false, 'mensagem' => 'Produto não encontrado']);
+                    exit;
+                }
+
+                $disponivel = $produto['quantidade'];
+                $suficiente = $disponivel >= $quantidade;
+
+                // Calcular qual seria o novo status após a distribuição
+                $nova_quantidade = $disponivel - $quantidade;
+                $novo_status = 'in_stock';
+                if ($nova_quantidade == 0) {
+                    $novo_status = 'out_of_stock';
+                } elseif ($nova_quantidade <= $produto['estoque_minimo']) {
+                    $novo_status = 'low_stock';
+                }
+
+                echo json_encode([
+                    'sucesso' => true,
+                    'disponivel' => $disponivel,
+                    'suficiente' => $suficiente,
+                    'nova_quantidade' => $nova_quantidade,
+                    'novo_status' => $novo_status,
+                    'estoque_minimo' => $produto['estoque_minimo'],
+                    'mensagem' => $suficiente ? 'Estoque disponível' : 'Estoque insuficiente. Disponível: ' . $disponivel
+                ]);
+            } catch (Exception $e) {
+                echo json_encode(['sucesso' => false, 'mensagem' => 'Erro: ' . $e->getMessage()]);
+            }
+            exit;
     }
 }
 
@@ -145,6 +247,17 @@ $categorias = [
     "Válvulas",
     "Vidros"
 ];
+
+$lojas = [
+    "Americanas",
+    "Amazon",
+    "Shein",
+    "Shopee",
+    "AliExpress",
+    "Mercado Livre"
+];
+
+$produtosDistribuidosBanco = buscarProdutosDistribuidos($pdo);
 ?>
 
 <!DOCTYPE html>
@@ -159,28 +272,16 @@ $categorias = [
     <!-- Header -->
     <header class="header">
         <div class="header-content">
-            <div class="header-title">
-                <h1>
-                    Sistema de Estoque
-                </h1>
-                <p>Gerenciamento e endereçamento de inventário</p>
+            <div class="header-title" style="display: flex; align-items: center;">
+                <img src="img/Logo (PNG).png" alt="Logo" style="height: 50px; margin-right: 15px;">
+                <div>
+                    <h1>
+                        Sistema de Estoque
+                    </h1>
+                    <p>Gerenciamento e endereçamento de inventário</p>
+                </div>
             </div>
-            <div class="header-actions">
-                <a href="Vendas.php" class="btn btn-success">
-                    <svg class="icon" viewBox="0 0 24 24">
-                        <circle cx="8" cy="21" r="1"/>
-                        <circle cx="19" cy="21" r="1"/>
-                        <path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57L23 6H6"/>
-                    </svg>
-                    Sistema de Vendas
-                </a>
-                <button class="btn btn-primary" onclick="abrirModalAdicionar()">
-                    <svg class="icon" viewBox="0 0 24 24">
-                        <line x1="12" y1="5" x2="12" y2="19"/>
-                        <line x1="5" y1="12" x2="19" y2="12"/>
-                    </svg>
-                    Adicionar Item
-                </button>
+                <!-- Botão movido para a seção de ações do card -->
             </div>
         </div>
     </header>
@@ -306,8 +407,45 @@ $categorias = [
         <!-- Tabela de Produtos -->
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title">Inventário</h3>
-                <p class="card-description"><?= count($produtos) ?> de <?= $estatisticas['total_produtos'] ?> itens</p>
+                <div>
+                    <h3 class="card-title">Inventário</h3>
+                    <p class="card-description"><?= count($produtos) ?> de <?= $estatisticas['total_produtos'] ?> itens</p>
+                </div>
+                <div class="card-header-actions">
+                    <button class="btn btn-primary" onclick="abrirModalAdicionar()">
+                        <svg class="icon" viewBox="0 0 24 24">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Adicionar Item
+                    </button>
+                    <a href="export_xls.php" class="btn btn-secondary">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 1.5V5.5C4 6.32843 4.67157 7 5.5 7H18.5C19.3284 7 20 6.32843 20 5.5V1.5C20 0.671573 19.3284 0 18.5 0H5.5C4.67157 0 4 0.671573 4 1.5Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                            <path d="M4 18.5V22.5C4 23.3284 4.67157 24 5.5 24H18.5C19.3284 24 20 23.3284 20 22.5V18.5C20 17.6716 19.3284 17 18.5 17H5.5C4.67157 17 4 17.6716 4 18.5Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                            <path d="M4 10.5V14.5C4 15.3284 4.67157 16 5.5 16H18.5C19.3284 16 20 15.3284 20 14.5V10.5C20 9.67157 19.3284 9 18.5 9H5.5C4.67157 9 4 9.67157 4 10.5Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                        </svg>
+                        Exportar Excel
+                    </a>
+                    <a href="export_pdf.php" class="btn btn-secondary">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6C4.89543 2 4 2.89543 4 4V20C4 21.1046 4.89543 22 6 22H18C19.1046 22 20 21.1046 20 20V8L14 2Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                            <path d="M14 2V8H20" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                            <path d="M10.5 17H13.5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                            <path d="M12 17V11" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                            <path d="M10.5 11H12.5C13.0523 11 13.5 11.4477 13.5 12V12C13.5 12.5523 13.0523 13 12.5 13H10.5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                        </svg>
+                        Exportar PDF
+                    </a>
+                    <button class="btn btn-secondary" onclick="abrirModalEtiqueta()">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            <circle cx="8.5" cy="8.5" r="1.5"/>
+                            <path d="M20.4 14.5L16 10 4 20"/>
+                        </svg>
+                        Gerar Etiqueta
+                    </button>
+                </div>
             </div>
             <div class="card-content">
                 <div class="table-container">
@@ -317,23 +455,23 @@ $categorias = [
                                 <th>Produto</th>
                                 <th>Categoria</th>
                                 <th>Localização</th>
-<th>Quantidade</th>
-<th>Informações ADC</th>
-<th>Status</th>
-<th>Valor</th>
-<th class="text-right">Ações</th>
+                                <th>Quantidade</th>
+                                <th>Informações ADC</th>
+                                <th>Status</th>
+                                <th>Valor</th>
+                                <th class="text-right">Ações</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php if (empty($produtos)): ?>
                                 <tr>
-                                    <td colspan="7" class="text-center" style="padding: 2rem; color: #64748b;">
+                                    <td colspan="8" class="text-center" style="padding: 2rem; color: #64748b;">
                                         <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem;">
-                                            <svg class="icon-lg" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <rect x="3" y="4" width="18" height="16" rx="2" ry="2" stroke="#6b7280" fill="none"></rect>
-                                            <line x1="3" y1="10" x2="21" y2="10" stroke="#6b7280"></line>
-                                            <line x1="9" y1="4" x2="9" y2="20" stroke="#6b7280"></line>
-                                            </svg>
+                                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="4" width="18" height="16" rx="2" ry="2" stroke="#6b7280" fill="none"></rect>
+                        <line x1="3" y1="10" x2="21" y2="10" stroke="#6b7280"></line>
+                        <line x1="9" y1="4" x2="9" y2="20" stroke="#6b7280"></line>
+                    </svg>
                                             <div>
                                                 <h3 style="font-weight: 600; margin-bottom: 0.5rem;">Nenhum produto cadastrado</h3>
                                                 <p>Comece adicionando seu primeiro produto ao estoque</p>
@@ -362,33 +500,33 @@ $categorias = [
                                                 <span><?= htmlspecialchars($produto['localizacao'] . ' - ' . $produto['zona'] . ' - ' . $produto['prateleira']) ?></span>
                                             </div>
                                         </td>
-<td>
-    <span class="font-medium"><?= $produto['quantidade'] ?></span>
-</td>
-<td>
-    <?= htmlspecialchars($produto['unidade']) ?>
-</td>
-<td>
-    <?php
-    $badgeClass = '';
-    $statusText = '';
-    switch ($produto['status']) {
-        case 'in_stock':
-            $badgeClass = 'badge-success';
-            $statusText = 'Em Estoque';
-            break;
-        case 'low_stock':
-            $badgeClass = 'badge-warning';
-            $statusText = 'Estoque Baixo';
-            break;
-        case 'out_of_stock':
-            $badgeClass = 'badge-danger';
-            $statusText = 'Sem Estoque';
-            break;
-    }
-    ?>
-    <span class="badge <?= $badgeClass ?>"><?= $statusText ?></span>
-</td>
+                                        <td>
+                                            <span class="font-medium"><?= $produto['quantidade'] ?></span>
+                                        </td>
+                                        <td>
+                                            <?= htmlspecialchars($produto['unidade']) ?>
+                                        </td>
+                                        <td>
+                                            <?php
+                                            $badgeClass = '';
+                                            $statusText = '';
+                                            switch ($produto['status']) {
+                                                case 'in_stock':
+                                                    $badgeClass = 'badge-success';
+                                                    $statusText = 'Em Estoque';
+                                                    break;
+                                                case 'low_stock':
+                                                    $badgeClass = 'badge-warning';
+                                                    $statusText = 'Estoque Baixo';
+                                                    break;
+                                                case 'out_of_stock':
+                                                    $badgeClass = 'badge-danger';
+                                                    $statusText = 'Sem Estoque';
+                                                    break;
+                                            }
+                                            ?>
+                                            <span class="badge <?= $badgeClass ?>"><?= $statusText ?></span>
+                                        </td>
                                         <td>R$ <?= number_format($produto['quantidade'] * $produto['custo'], 2, ',', '.') ?></td>
                                         <td class="text-right">
                                             <div class="actions">
@@ -423,43 +561,100 @@ $categorias = [
         </div>
     </main>
 
-    <!-- Seção de Solicitação de Produtos -->
-    <section class="solicitacao-produtos card" style="margin: 2rem auto; max-width: 900px; padding: 1rem;">
-        <h3>Solicitar Produtos do Estoque</h3>
-        <p>Gerencie suas solicitações</p>
-        <form id="formSolicitacao" onsubmit="return false;" style="margin-bottom: 1rem;">
-            <div class="form-group" style="width: fit-content;">
-                <button type="button" class="btn btn-primary" onclick="abrirModalAdicionarSolicitacao()">
-                    <svg class="icon" viewBox="0 0 24 24">
-                        <line x1="12" y1="5" x2="12" y2="19"/>
-                        <line x1="5" y1="12" x2="19" y2="12"/>
-                    </svg>
-                    Adicionar Produto
-                </button>
-            </div>
-        </form>
+    <!-- Seção de Distribuição de Produtos -->
+    <section class="solicitacao-produtos card" style="margin: 2rem auto; max-width: 1200px; padding: 1rem;">
+        <h2>Distribuir Produtos para Loja</h2>
+        <p>Gerencie suas distribuições de produtos</p>
+        
+        <div style="margin-bottom: 1rem;">
+            <button type="button" class="btn btn-primary" onclick="abrirModalDistribuirProduto()">
+                <svg class="icon" viewBox="0 0 24 24">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                Adicionar Produto
+            </button>
+        </div>
 
-        <div id="listaProdutosSolicitados" style="margin-top: 1rem;">
-            <h4>Produtos Solicitados</h4>
+        <div id="listaProdutosDistribuidos" style="margin-top: 1rem;">
+            <h4>Produtos Distribuídos</h4>
             <table class="table" style="width: 100%;">
                 <thead>
                     <tr>
                         <th>Loja</th>
                         <th>Produto</th>
                         <th>Quantidade</th>
-                        <th>Unidade</th>
-                        <th>Preço de Venda</th>
-                        <th>Ações</th>
+                        <th>Preço de Venda (R$)</th>
+                        <th>Data</th>
                     </tr>
                 </thead>
-                <tbody id="corpoTabelaProdutosSolicitados">
-                    <!-- Produtos adicionados aparecerão aqui -->
+                <tbody id="corpoTabelaProdutosDistribuidos">
+                    <?php if (empty($produtosDistribuidosBanco)): ?>
+                        <tr>
+                            <td colspan="5" style="text-align: center; padding: 2rem; color: #64748b;">
+                                Nenhum produto distribuído
+                            </td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($produtosDistribuidosBanco as $item): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($item['loja']) ?></td>
+                                <td><?= htmlspecialchars($item['produto_nome'] ?? 'Produto ID: ' . $item['produto']) ?></td>
+                                <td><?= (int)$item['quantidade'] ?></td>
+                                <td>R$ <?= number_format($item['preco_venda'], 2, ',', '.') ?></td>
+                                <td><?= date('d/m/Y H:i', strtotime($item['data_distribuicao'])) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
                 </tbody>
             </table>
         </div>
-
-        <button type="button" class="btn btn-success" style="margin-top: 1rem;" onclick="enviarSolicitacao()">Enviar Solicitação</button>
     </section>
+
+    <!-- Modal Distribuir Produto -->
+    <div id="modalDistribuirProduto" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title">Distribuir Produto para Loja</h2>
+                <p class="modal-description">Preencha os dados para distribuir o produto</p>
+            </div>
+            <div class="modal-content">
+                <form id="formModalDistribuirProduto" class="form-grid">
+                    <div class="form-group">
+                        <label for="loja_id">Loja</label>
+                        <select id="loja_id" name="loja_id" class="select" required>
+                            <option value="">Selecione uma loja</option>
+                            <?php foreach ($lojas as $loja): ?>
+                                <option value="<?= htmlspecialchars($loja) ?>"><?= htmlspecialchars($loja) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="produto_id">Produto</label>
+                        <select id="produto_id" name="produto_id" class="select" required>
+                            <option value="">Selecione um produto</option>
+                            <?php foreach ($produtos as $produto): ?>
+                                <option value="<?= (int)$produto['id'] ?>" data-stock="<?= (int)$produto['quantidade'] ?>"><?= htmlspecialchars($produto['nome']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="quantidade_dist">Quantidade</label>
+                        <input type="number" id="quantidade_dist" name="quantidade_dist" class="input" min="1" required>
+                        <small id="estoque-info" style="color: #64748b; font-size: 0.75rem;"></small>
+                    </div>
+                    <div class="form-group">
+                        <label for="preco_venda_dist">Preço de Venda (R$)</label>
+                        <input type="number" id="preco_venda_dist" name="preco_venda_dist" class="input" step="0.01" min="0" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="fecharModal('modalDistribuirProduto')">Cancelar</button>
+                <button type="button" class="btn btn-success" onclick="salvarDistribuicao()">Salvar</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Modal Adicionar Produto Solicitado -->
     <div id="modalAdicionarSolicitacao" class="modal-overlay">
@@ -536,11 +731,11 @@ $categorias = [
                     <input type="hidden" id="produtoId" name="id">
                     <div class="form-group">
                         <label for="nome">Especificação do Produto</label>
-<input type="text" id="nome" name="nome" class="input" placeholder="Ex: Disco Freio Traseiro" required>
+                        <input type="text" id="nome" name="nome" class="input" placeholder="Ex: Disco Freio Traseiro" required>
                     </div>
                     <div class="form-group">
                         <label for="categoria">Categoria</label>
-<select id="categoria" name="categoria" class="select" required>
+                        <select id="categoria" name="categoria" class="select" required>
                             <option value="">Selecione uma categoria</option>
                             <?php if (!empty($categorias)): ?>
                                 <?php foreach ($categorias as $categoria): ?>
@@ -551,7 +746,7 @@ $categorias = [
                     </div>
                     <div class="form-group">
                         <label for="fornecedor">Fornecedor</label>
-<input type="text" id="fornecedor" name="fornecedor" class="input" placeholder="Nome do fornecedor" required>
+                        <input type="text" id="fornecedor" name="fornecedor" class="input" placeholder="Nome do fornecedor" required>
                     </div>
                     
                     <div class="form-group full-width">
@@ -559,15 +754,15 @@ $categorias = [
                         <div class="form-group-3">
                             <div>
                                 <label for="localizacao">Local</label>
-<input type="text" id="localizacao" name="localizacao" class="input" placeholder="Galpão A" required>
+                                <input type="text" id="localizacao" name="localizacao" class="input" placeholder="Galpão A" required>
                             </div>
                             <div>
                                 <label for="zona">Zona</label>
-<input type="text" id="zona" name="zona" class="input" placeholder="A1" required>
+                                <input type="text" id="zona" name="zona" class="input" placeholder="A1" required>
                             </div>
                             <div>
                                 <label for="prateleira">Prateleira</label>
-<input type="text" id="prateleira" name="prateleira" class="input" placeholder="A1-03" required>
+                                <input type="text" id="prateleira" name="prateleira" class="input" placeholder="A1-03" required>
                             </div>
                         </div>
                     </div>
@@ -577,11 +772,11 @@ $categorias = [
                         <div class="form-group-2">
                             <div>
                                 <label for="quantidade">Quantidade</label>
-<input type="number" id="quantidade" name="quantidade" class="input" placeholder="100" required>
+                                <input type="number" id="quantidade" name="quantidade" class="input" placeholder="100" required>
                             </div>
                             <div>
-<label for="unidade">Informação ADC.</label>
-<input type="text" id="unidade" name="unidade" class="input" placeholder="un" required>
+                                <label for="unidade">Informação ADC.</label>
+                                <input type="text" id="unidade" name="unidade" class="input" placeholder="un" required>
                             </div>
                         </div>
                     </div>
@@ -591,11 +786,11 @@ $categorias = [
                         <div class="form-group-2">
                             <div>
                                 <label for="estoque_minimo">Estoque Mín.</label>
-<input type="number" id="estoque_minimo" name="estoque_minimo" class="input" placeholder="50" required>
+                                <input type="number" id="estoque_minimo" name="estoque_minimo" class="input" placeholder="50" required>
                             </div>
                             <div>
                                 <label for="estoque_maximo">Estoque Máx.</label>
-<input type="number" id="estoque_maximo" name="estoque_maximo" class="input" placeholder="500" required>
+                                <input type="number" id="estoque_maximo" name="estoque_maximo" class="input" placeholder="500" required>
                             </div>
                         </div>
                     </div>
@@ -605,11 +800,11 @@ $categorias = [
                         <div class="form-group-2">
                             <div>
                                 <label for="custo">Custo Unitário (R$)</label>
-<input type="number" id="custo" name="custo" class="input" step="0.01" placeholder="0.25" required>
+                                <input type="number" id="custo" name="custo" class="input" step="0.01" placeholder="0.25" required>
                             </div>
                             <div>
                                 <label for="preco_venda">Preço de Venda (R$)</label>
-<input type="number" id="preco_venda" name="preco_venda" class="input" step="0.01" placeholder="0.50" required>
+                                <input type="number" id="preco_venda" name="preco_venda" class="input" step="0.01" placeholder="0.50" required>
                             </div>
                         </div>
                     </div>
@@ -622,6 +817,95 @@ $categorias = [
         </div>
     </div>
 
+    <!-- Modal Etiqueta -->
+    <div id="modalEtiqueta" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title">Gerar Etiqueta</h2>
+                <p class="modal-description">Gere etiquetas para identificação de produtos</p>
+            </div>
+            <div class="modal-content">
+                <form id="formEtiqueta" class="form-grid">
+                    <div class="form-group">
+                        <label for="etiquetaLetra">Letra:</label>
+                        <select id="etiquetaLetra" class="select" required>
+                            <option value="L">L</option>
+                            <option value="Z">Z</option>
+                            <option value="P">P</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="etiquetaNumero">Número:</label>
+                        <input type="number" id="etiquetaNumero" class="input" placeholder="Digite apenas números" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <svg width="250" height="120" id="etiquetaPreview">
+                            <path d="M15,20 L170,20 Q180,20 180,30 L180,90 Q180,100 170,100 L15,100 Q5,100 5,90 L5,30 Q5,20 15,20 Z" 
+                                  fill="black" stroke="white" stroke-width="3"/>
+                            <circle cx="155" cy="60" r="8" fill="white"/>
+                            <text x="95" y="70" fill="white" font-family="Arial, sans-serif" font-size="22" font-weight="bold" text-anchor="middle" id="textoEtiqueta">P-11</text>
+                        </svg>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="fecharModal('modalEtiqueta')">Cancelar</button>
+                <button class="btn btn-primary" onclick="gerarEtiquetaPDF()">Gerar PDF</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Etiqueta -->
+    <div id="modalEtiqueta" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title">Gerar Etiqueta</h2>
+                <p class="modal-description">Gere etiquetas para identificação de produtos</p>
+            </div>
+            <div class="modal-content">
+                <form id="formEtiqueta" class="form-grid">
+                    <div class="form-group">
+                        <label for="etiquetaLetra">Letra:</label>
+                        <select id="etiquetaLetra" name="etiquetaLetra" class="select" required>
+                            <option value="L">L</option>
+                            <option value="Z">Z</option>
+                            <option value="P">P</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="etiquetaNumero">Número:</label>
+                        <input type="number" id="etiquetaNumero" name="etiquetaNumero" class="input" placeholder="Digite apenas números" required>
+                    </div>
+                    
+                    <div class="form-group text-center">
+                        <h3>Preview da Etiqueta:</h3>
+                        <svg width="250" height="120" id="etiquetaPreview">
+                            <!-- Etiqueta completa com bordas arredondadas -->
+                            <path d="M15,20 L170,20 Q180,20 180,30 L180,90 Q180,100 170,100 L15,100 Q5,100 5,90 L5,30 Q5,20 15,20 Z" 
+                                  fill="black" stroke="white" stroke-width="3"/>
+                            <!-- Círculo do buraco -->
+                            <circle cx="185" cy="30" r="8" fill="white"/>
+                            <!-- Texto -->
+                            <text x="95" y="65" fill="white" font-family="Arial, sans-serif" font-size="22" font-weight="bold" text-anchor="middle" id="textoEtiqueta">P-11</text>
+                        </svg>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="document.getElementById('modalEtiqueta').classList.remove('active'); document.body.style.overflow = 'auto';">Cancelar</button>
+                <button class="btn btn-primary" onclick="gerarEtiquetaPDF()">Gerar PDF</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script>
+        // Garantir que o jsPDF esteja disponível globalmente
+        window.jspdf = window.jspdf || {};
+    </script>
     <script src="estoque.js"></script>
+    <script src="etiquetas.js"></script>
 </body>
 </html>
